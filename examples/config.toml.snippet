@@ -1,0 +1,12 @@
+# Point Codex CLI / IDE at a local Zion Codex Pool instance.
+# User-level only (~/.codex/config.toml) — project-local layers cannot set model_provider.
+
+model_provider = "zion-pool"
+
+[model_providers.zion-pool]
+name = "OpenAI"
+base_url = "http://127.0.0.1:4000/backend-api/codex"
+env_key = "CODEX_POOL_API_KEY"
+wire_api = "responses"
+supports_websockets = true
+requires_openai_auth = true
