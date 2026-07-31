@@ -129,7 +129,12 @@ export async function refreshAllQuotas(store: AccountStore): Promise<void> {
   store.backfillIdentities();
   for (const account of store.list()) {
     const { quota, auth } = await fetchQuota(account.auth);
-    store.saveAuth(account.meta.id, auth);
+    // Only write back when fetchQuota actually rotated the tokens — an
+    // unconditional write here would clobber a concurrent import/relogin
+    // (e.g. via /admin/accounts/import) that landed on disk after store.list()
+    // took its snapshot, reintroducing the very "still 401 after relogin" bug
+    // this account state was supposed to fix.
+    if (auth !== account.auth) store.saveAuth(account.meta.id, auth);
     store.setQuota(account.meta.id, quota);
   }
 }

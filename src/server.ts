@@ -21,8 +21,8 @@ export function createApp(config: Config): App {
   const server = http.createServer(async (req, res) => {
     try {
       if (handleHealth(req, res, pool)) return;
-      if (await handleAdmin(req, res, pool, config.poolApiKey)) return;
-      if (await handleCodexHttp(req, res, pool, config.upstreamBase, config.poolApiKey)) return;
+      if (await handleAdmin(req, res, pool)) return;
+      if (await handleCodexHttp(req, res, pool, config.upstreamBase)) return;
       sendJson(res, 404, { error: { message: "Not found" } });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -51,16 +51,6 @@ export function createApp(config: Config): App {
     if (url.pathname !== "/backend-api/codex/responses") {
       socket.destroy();
       return;
-    }
-    if (config.poolApiKey) {
-      const auth = req.headers.authorization ?? "";
-      const match = /^Bearer\s+(.+)$/i.exec(auth);
-      const token = match?.[1]?.trim() ?? "";
-      if (token !== config.poolApiKey) {
-        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-        socket.destroy();
-        return;
-      }
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);

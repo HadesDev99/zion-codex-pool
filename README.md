@@ -44,7 +44,6 @@ From the **Zion Pool** sidebar: Start Pooler → Add account (login / import liv
 
 ```bash
 cd zion-codex-pool
-cp .env.example .env   # keep HOST=127.0.0.1; leave POOL_API_KEY unset
 npm install
 npm run dev
 ```
@@ -77,9 +76,6 @@ Keep a normal ChatGPT login in `~/.codex/auth.json` if you set
 `requires_openai_auth = true` (Codex still wants a signed-in identity for IDE
 features). Upstream ChatGPT tokens come from the pool, not from a pool API key.
 
-Optional: set `POOL_API_KEY` only if you bind beyond `127.0.0.1`. Then add
-`env_key = "CODEX_POOL_API_KEY"` to the provider block.
-
 ## Endpoints
 
 | Path | Role |
@@ -94,8 +90,8 @@ Optional: set `POOL_API_KEY` only if you bind beyond `127.0.0.1`. Then add
 | `DELETE /admin/accounts/:id` | Remove account |
 | `POST /admin/quota/refresh` | Refresh usage windows |
 
-Admin + Codex routes are open when `POOL_API_KEY` is unset (default local mode).
-If you set a key, they require `Authorization: Bearer $POOL_API_KEY`.
+The pooler is fixed to loopback (`127.0.0.1:4000`) and is not configurable
+through environment variables.
 
 ## Behaviour (from llm-router patterns)
 

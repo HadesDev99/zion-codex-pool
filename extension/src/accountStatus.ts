@@ -279,6 +279,6 @@ export function accountStatusTooltipLines(
     );
   }
 
-  if (dataDir) lines.push(`DATA_DIR: ${dataDir}`);
+  if (dataDir) lines.push(`Data: ${dataDir}`);
   return lines;
 }

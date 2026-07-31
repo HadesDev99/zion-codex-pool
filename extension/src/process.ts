@@ -49,23 +49,13 @@ export class PoolProcessManager {
     }
 
     this.output.appendLine(`Starting pooler: node ${entry}`);
-    this.output.appendLine(`DATA_DIR=${settings.dataDir} HOST=${settings.host} PORT=${settings.port}`);
-
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOST: settings.host,
-      PORT: String(settings.port),
-      DATA_DIR: settings.dataDir,
-    };
-    if (settings.poolApiKey) env.POOL_API_KEY = settings.poolApiKey;
-    else delete env.POOL_API_KEY;
+    this.output.appendLine(
+      `Fixed runtime: http://${settings.host}:${settings.port} · ${settings.dataDir}`
+    );
 
     try {
-      // Prefer a real Node binary — process.execPath inside VS Code/Cursor is Electron.
-      const nodeBin = process.env.NODE_BINARY || "node";
-      this.child = spawn(nodeBin, [entry], {
+      this.child = spawn("node", [entry], {
         cwd: path.dirname(entry),
-        env,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {

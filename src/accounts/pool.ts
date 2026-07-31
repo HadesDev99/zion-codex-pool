@@ -20,6 +20,16 @@ export function isInCooldown(meta: AccountRecord["meta"], now = Date.now()): boo
   return Date.parse(meta.cooldownUntil) > now;
 }
 
+/**
+ * Rank accounts for selection: any account that failed a 401/403 even after a
+ * forced token refresh sorts after every account that hasn't, regardless of
+ * quota usage — it's effectively pushed to the back of the list until a
+ * request against it succeeds again (markUsed clears authFailedAt).
+ */
+export function selectionRank(meta: AccountRecord["meta"]): number {
+  return (meta.authFailedAt ? 1 : 0) * 1_000 + maxPercentUsed(meta.quota);
+}
+
 export function getQuotaCooldown(backoffLevel = 0): number {
   const level = Math.max(0, backoffLevel - 1);
   return Math.min(BACKOFF_BASE_MS * 2 ** level, BACKOFF_MAX_MS);
@@ -169,7 +179,7 @@ export function pickAccount(
     const softened = accounts.filter(
       (a) => !exclude.has(a.meta.id) && !a.meta.stickyDisabled && !isInCooldown(a.meta, now)
     );
-    return softened.sort((a, b) => maxPercentUsed(a.meta.quota) - maxPercentUsed(b.meta.quota))[0];
+    return softened.sort((a, b) => selectionRank(a.meta) - selectionRank(b.meta))[0];
   }
 
   if (opts.preferId) {
@@ -177,7 +187,7 @@ export function pickAccount(
     if (preferred) return preferred;
   }
 
-  return available.sort((a, b) => maxPercentUsed(a.meta.quota) - maxPercentUsed(b.meta.quota))[0];
+  return available.sort((a, b) => selectionRank(a.meta) - selectionRank(b.meta))[0];
 }
 
 /** Sticky map: conversation/session key → account id */
@@ -226,14 +236,25 @@ export class AccountPool {
   markUsed(accountId: string, sessionKey?: string): void {
     const rec = this.store.get(accountId);
     if (!rec) return;
-    this.store.saveMeta({ ...rec.meta, lastUsedAt: new Date().toISOString(), lastError: undefined });
+    // A successful upstream call proves auth works right now — a lingering
+    // quota.error is just a stale result from an earlier failed poll (e.g. one
+    // that raced a token refresh/import) and would otherwise keep the account
+    // showing "logged out" until the next quota poll cycle overwrites it.
+    const quota = rec.meta.quota;
+    this.store.saveMeta({
+      ...rec.meta,
+      lastUsedAt: new Date().toISOString(),
+      lastError: undefined,
+      authFailedAt: undefined,
+      quota: quota?.error ? { ...quota, error: undefined } : quota,
+    });
     this.sticky.set(sessionKey, accountId);
   }
 
   markCooldown(
     accountId: string,
     cooldownMs: number,
-    opts?: { backoffLevel?: number; error?: string; permanent?: boolean }
+    opts?: { backoffLevel?: number; error?: string; permanent?: boolean; authFailed?: boolean }
   ): void {
     const rec = this.store.get(accountId);
     if (!rec) return;
@@ -247,6 +268,7 @@ export class AccountPool {
       backoffLevel: opts?.backoffLevel ?? rec.meta.backoffLevel,
       stickyDisabled: opts?.permanent ? true : rec.meta.stickyDisabled,
       lastError: opts?.error,
+      authFailedAt: opts?.authFailed ? new Date().toISOString() : rec.meta.authFailedAt,
     });
   }
 }

@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { PoolClient } from "./client";
@@ -104,30 +103,92 @@ async function importFile(opts: {
   }
 }
 
-async function loginWithCodex(opts: {
+/**
+ * Run `codex login` with CODEX_HOME pointed at a throwaway directory so it
+ * *should* never touch the user's real ~/.codex/auth.json. In practice some
+ * codex-cli versions still write (or otherwise disturb) the live file during
+ * the OAuth callback regardless of CODEX_HOME — so this also snapshots the
+ * live file before the login and restores it byte-for-byte afterward,
+ * whichever path the fresh credentials actually landed in. Net effect on
+ * ~/.codex is always zero, independent of codex-cli's internals.
+ */
+async function loginWithCodexTerminal(opts: {
   client: PoolClient;
   settings: PoolSettings;
-  refreshUi: () => Promise<void>;
   log: (line: string) => void;
-}): Promise<void> {
+  terminalName: string;
+  waitingMessage: string;
+}): Promise<{ id: string; email?: string } | undefined> {
   const pendingId = `login_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`;
   const codexHome = path.join(opts.settings.dataDir, "login-pending", pendingId);
   fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
   const authPath = path.join(codexHome, "auth.json");
+  const livePath = liveCodexAuthPath();
+  const liveBackup = fs.existsSync(livePath) ? fs.readFileSync(livePath) : undefined;
 
   const terminal = vscode.window.createTerminal({
-    name: "Codex login (Zion Pool)",
+    name: opts.terminalName,
     cwd: codexHome,
     env: { CODEX_HOME: codexHome },
   });
   terminal.show();
   terminal.sendText("codex login");
 
-  void vscode.window.showInformationMessage(
-    "Zion Pool: finish `codex login` in the terminal. The account will appear once auth.json is written."
+  void vscode.window.showInformationMessage(opts.waitingMessage);
+
+  const imported = await waitForAuthAndImport(
+    { isolatedPath: authPath, livePath, liveBackup },
+    opts.client,
+    opts.log,
+    10 * 60_000
   );
 
-  const imported = await waitForAuthAndImport(authPath, opts.client, opts.log, 10 * 60_000);
+  restoreLiveAuth(livePath, liveBackup, opts.log);
+
+  // Best-effort cleanup of the isolated login home (auth already imported).
+  try {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+
+  return imported;
+}
+
+/** Put ~/.codex/auth.json back exactly as it was before this login attempt. */
+function restoreLiveAuth(
+  livePath: string,
+  liveBackup: Buffer | undefined,
+  log: (line: string) => void
+): void {
+  try {
+    if (liveBackup) {
+      if (!fs.existsSync(livePath) || !fs.readFileSync(livePath).equals(liveBackup)) {
+        fs.writeFileSync(livePath, liveBackup, { mode: 0o600 });
+        log(`restored ${livePath} to its pre-login state`);
+      }
+    } else if (fs.existsSync(livePath)) {
+      fs.rmSync(livePath, { force: true });
+      log(`removed ${livePath} written by codex login (there was none before)`);
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    log(`failed to restore ${livePath}: ${msg}`);
+  }
+}
+
+async function loginWithCodex(opts: {
+  client: PoolClient;
+  settings: PoolSettings;
+  refreshUi: () => Promise<void>;
+  log: (line: string) => void;
+}): Promise<void> {
+  const imported = await loginWithCodexTerminal({
+    ...opts,
+    terminalName: "Codex login (Zion Pool)",
+    waitingMessage:
+      "Zion Pool: finish `codex login` in the terminal. The account will appear once auth.json is written.",
+  });
   if (imported) {
     await opts.refreshUi();
     void vscode.window.showInformationMessage(
@@ -138,34 +199,98 @@ async function loginWithCodex(opts: {
       "Zion Pool: login timed out or was cancelled. You can retry via Add account."
     );
   }
+}
 
-  // Best-effort cleanup of the isolated login home (auth already imported).
-  try {
-    fs.rmSync(codexHome, { recursive: true, force: true });
-  } catch {
-    /* ignore */
+/**
+ * Re-authenticate an existing pool account whose ChatGPT session has died
+ * (refresh_token revoked/expired — no amount of token refresh recovers that).
+ * Runs the same isolated `codex login` as "Add account", but afterwards
+ * checks that the account the user logged into is the SAME one — importAuth
+ * dedupes by ChatGPT identity, so logging into the right account updates its
+ * auth.json in place; logging into a different one would silently leave the
+ * original still dead while creating/refreshing an unrelated entry.
+ */
+export async function runReloginAccount(opts: {
+  client: PoolClient;
+  settings: PoolSettings;
+  refreshUi: () => Promise<void>;
+  log: (line: string) => void;
+  accountId: string;
+  accountLabel: string;
+}): Promise<void> {
+  const imported = await loginWithCodexTerminal({
+    client: opts.client,
+    settings: opts.settings,
+    log: opts.log,
+    terminalName: "Codex relogin (Zion Pool)",
+    waitingMessage: `Zion Pool: finish \`codex login\` as ${opts.accountLabel} in the terminal.`,
+  });
+
+  if (!imported) {
+    void vscode.window.showWarningMessage(
+      `Zion Pool: relogin for ${opts.accountLabel} timed out or was cancelled.`
+    );
+    return;
   }
+
+  await opts.refreshUi();
+
+  if (imported.id !== opts.accountId) {
+    void vscode.window.showWarningMessage(
+      `Zion Pool: logged into ${imported.email ?? imported.id}, which is a different account than ${opts.accountLabel}. ` +
+        `That account was imported/refreshed instead — ${opts.accountLabel} is still logged out.`
+    );
+    return;
+  }
+
+  void vscode.window.showInformationMessage(
+    `Zion Pool: ${imported.email ?? imported.id} is logged in again.`
+  );
 }
 
 async function waitForAuthAndImport(
-  authPath: string,
+  paths: { isolatedPath: string; livePath: string; liveBackup: Buffer | undefined },
   client: PoolClient,
   log: (line: string) => void,
   timeoutMs: number
 ): Promise<{ id: string; email?: string } | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (fs.existsSync(authPath)) {
+    // Isolated CODEX_HOME is the expected landing spot for the fresh tokens.
+    if (fs.existsSync(paths.isolatedPath)) {
       try {
-        // Give Codex a moment to finish writing.
-        await sleep(400);
-        const auth = readJsonFile(authPath);
+        await sleep(400); // give codex a moment to finish writing
+        const auth = readJsonFile(paths.isolatedPath);
         return await client.importAuth(auth);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         log(`login import failed (will retry): ${msg}`);
       }
     }
+
+    // Fallback: some codex-cli versions write the live file regardless of
+    // CODEX_HOME. Detect that by content diff against the pre-login snapshot
+    // — restoreLiveAuth() puts it back afterward either way.
+    if (fs.existsSync(paths.livePath)) {
+      let liveBytes: Buffer | undefined;
+      try {
+        liveBytes = fs.readFileSync(paths.livePath);
+      } catch {
+        liveBytes = undefined;
+      }
+      if (liveBytes && (!paths.liveBackup || !liveBytes.equals(paths.liveBackup))) {
+        try {
+          await sleep(400);
+          const auth = JSON.parse(fs.readFileSync(paths.livePath, "utf8"));
+          log(`codex login wrote ${paths.livePath} instead of the isolated CODEX_HOME — importing from there`);
+          return await client.importAuth(auth);
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          log(`login import from live path failed (will retry): ${msg}`);
+        }
+      }
+    }
+
     await sleep(1000);
   }
   return undefined;
@@ -173,27 +298,6 @@ async function waitForAuthAndImport(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Alternate data dirs that often hold accounts from CLI/manual runs. */
-export function knownAlternateDataDirs(activeDataDir: string): string[] {
-  const candidates = [
-    path.join(os.homedir(), "Personal/zion-codex-pool/.data/prod"),
-  ];
-  return candidates.filter((d) => {
-    if (path.resolve(d) === path.resolve(activeDataDir)) return false;
-    const accounts = path.join(d, "accounts");
-    try {
-      return (
-        fs.existsSync(accounts) &&
-        fs.readdirSync(accounts).some((name) => {
-          return fs.existsSync(path.join(accounts, name, "auth.json"));
-        })
-      );
-    } catch {
-      return false;
-    }
-  });
 }
 
 export function countAccountsOnDisk(dataDir: string): number {

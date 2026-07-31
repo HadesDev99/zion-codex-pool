@@ -48,7 +48,8 @@ Unset `zionPool.serverPath` in settings: the extension looks for
 ## Settings
 
 - `zionPool.autoStart` — spawn on activate (default on)
-- `zionPool.host` / `zionPool.port` — must match Codex `base_url`
-- `zionPool.dataDir` — empty → `~/.zion-codex-pool`
-- `zionPool.poolApiKey` — optional; empty = open loopback
 - `zionPool.applyConfigOnStart` — merge pool provider into `~/.codex/config.toml`
+
+Runtime values are fixed: `127.0.0.1:4000`, data under
+`~/.zion-codex-pool`, and the standard ChatGPT Codex upstream. The extension
+does not require external runtime configuration.

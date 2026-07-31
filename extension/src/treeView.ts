@@ -6,7 +6,7 @@ import {
   deriveAccountStatus,
 } from "./accountStatus";
 import { AccountSummary, HealthInfo, PoolClient } from "./client";
-import { countAccountsOnDisk, knownAlternateDataDirs } from "./addAccount";
+import { countAccountsOnDisk } from "./addAccount";
 import { readSettings } from "./settings";
 
 export class PoolTreeItem extends vscode.TreeItem {
@@ -84,7 +84,7 @@ export class PoolTreeProvider implements vscode.TreeDataProvider<PoolTreeItem> {
           contextValue: "poolStatus",
           tooltip: [
             "Click Start Pooler in the title bar, or run Zion Pool: Start Pooler",
-            `DATA_DIR: ${dataDir}`,
+            `Data: ${dataDir}`,
           ].join("\n"),
           command: {
             command: "zionPool.start",
@@ -105,21 +105,15 @@ export class PoolTreeProvider implements vscode.TreeDataProvider<PoolTreeItem> {
 
     if (this.health && this.accounts.length === 0) {
       const onDisk = countAccountsOnDisk(dataDir);
-      const alts = knownAlternateDataDirs(dataDir);
-      const altHint =
-        alts.length > 0
-          ? `Found accounts in ${alts[0]} — set zionPool.dataDir or copy them into this DATA_DIR.`
-          : undefined;
       items.push(
         new PoolTreeItem(`No accounts in ${dataDir}`, undefined, {
           icon: "warning",
           contextValue: "poolEmpty",
           tooltip: [
-            `DATA_DIR: ${dataDir}`,
+            `Data: ${dataDir}`,
             onDisk === 0
               ? "No auth.json found under accounts/."
               : `${onDisk} account folder(s) on disk but pooler reports 0 — try refresh / restart.`,
-            altHint,
             "Use Add account… to log in or import.",
           ]
             .filter(Boolean)
@@ -140,6 +134,14 @@ export class PoolTreeProvider implements vscode.TreeDataProvider<PoolTreeItem> {
           tooltip: accountStatusTooltipLines(account, badge, dataDir).join("\n"),
           contextValue: "poolAccount",
           icon: badge.icon,
+          command:
+            badge.kind === "logged_out"
+              ? {
+                  command: "zionPool.reloginAccount",
+                  title: "Relogin",
+                  arguments: [{ accountId: account.id }],
+                }
+              : undefined,
         })
       );
     }

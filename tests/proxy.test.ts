@@ -268,6 +268,47 @@ describe("attachCodexWebSocket", () => {
     client.close();
   });
 
+  it("reconnects on another account after upstream drops the connection before responding", async () => {
+    harness = await startWsHarness(0, {
+      accountCount: 2,
+      capacityRetryDelaysMs: [0],
+      onUpstreamMessage: (socket, connectionNumber) => {
+        if (connectionNumber === 1) {
+          // Simulate the upstream dying mid-turn (no capacity frame, no
+          // response.completed — just a dropped connection), the failure
+          // mode behind "websocket closed by server before response.completed".
+          socket.close(1011, "simulated upstream drop");
+          return;
+        }
+        socket.send(
+          JSON.stringify({
+            type: "response.completed",
+            response: { id: "recovered" },
+          })
+        );
+      },
+    });
+    const client = new WebSocket(harness.localUrl);
+    await new Promise((resolve) => client.once("open", resolve));
+
+    const received = new Promise<string>((resolve) => {
+      client.once("message", (data) => resolve(data.toString()));
+    });
+    client.send(JSON.stringify({ type: "response.create", id: "drop-turn" }));
+
+    await expect(received).resolves.toContain("recovered");
+    expect(harness.upstreamConnections).toBe(2);
+    expect(
+      harness.upstreamMessages.map((message) => JSON.parse(message).id)
+    ).toEqual(["drop-turn", "drop-turn"]);
+
+    const cooledMeta = harness.pool.store.get("acct-1")?.meta;
+    expect(cooledMeta?.cooldownUntil).toBeDefined();
+    expect(Date.parse(cooledMeta!.cooldownUntil!)).toBeGreaterThan(Date.now());
+
+    client.close();
+  });
+
   it("resumes capacity retries for a later turn on the same long-lived connection", async () => {
     harness = await startWsHarness(0, {
       accountCount: 2,

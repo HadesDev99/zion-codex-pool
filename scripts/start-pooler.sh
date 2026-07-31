@@ -8,8 +8,8 @@ if lsof -nP -iTCP:4000 -sTCP:LISTEN >/dev/null 2>&1; then
   exit 0
 fi
 npm run build >/dev/null
-mkdir -p .data/prod
-nohup npm run start >> .data/prod/pooler.log 2>&1 &
+mkdir -p .data
+nohup npm run start >> .data/pooler.log 2>&1 &
 disown || true
 for i in $(seq 1 20); do
   if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
@@ -20,5 +20,5 @@ for i in $(seq 1 20); do
   sleep 0.25
 done
 echo "failed to start" >&2
-tail -50 .data/prod/pooler.log >&2 || true
+tail -50 .data/pooler.log >&2 || true
 exit 1

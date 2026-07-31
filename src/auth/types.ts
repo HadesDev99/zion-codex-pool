@@ -31,6 +31,8 @@ export interface AccountState {
   cooldownUntil?: string;
   backoffLevel?: number;
   stickyDisabled?: boolean;
+  /** ISO timestamp of the last 401/403 that survived a forced token refresh — sorts the account to the back of pickAccount until it succeeds again */
+  authFailedAt?: string;
   lastError?: string;
   lastUsedAt?: string;
   quota?: QuotaInfo;

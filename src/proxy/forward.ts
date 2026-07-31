@@ -16,6 +16,7 @@ const SSE_FALLBACK_PATTERNS = [
   "server_is_overloaded",
   "service_unavailable_error",
   "usage_limit_reached",
+  "experiencing high demand",
 ];
 
 export interface ProxyContext {
@@ -28,19 +29,40 @@ function upstreamUrl(base: string, pathAfterCodex: string): string {
   return `${base}${pathAfterCodex}`;
 }
 
+function accountLabel(account: AccountRecord): string {
+  return account.meta.email ?? account.meta.id;
+}
+
 async function ensureFresh(account: AccountRecord, pool: AccountPool): Promise<AccountRecord> {
   if (!needsTokenRefresh(account.auth)) return account;
-  const next = await refreshAuth(account.auth);
-  if (!next) return account;
-  pool.store.saveAuth(account.meta.id, next);
-  return pool.store.get(account.meta.id) ?? { ...account, auth: next };
+  const id = account.meta.id;
+  const locked = await pool.store.acquireRefreshLock(id);
+  try {
+    // Another process (e.g. a sibling pool sharing this data directory) may have
+    // already refreshed this account while we were waiting for the lock.
+    const current = pool.store.get(id) ?? account;
+    if (!needsTokenRefresh(current.auth)) return current;
+    const next = await refreshAuth(current.auth);
+    if (!next) return current;
+    pool.store.saveAuth(id, next);
+    return pool.store.get(id) ?? { ...current, auth: next };
+  } finally {
+    if (locked) pool.store.releaseRefreshLock(id);
+  }
 }
 
 async function forceRefresh(account: AccountRecord, pool: AccountPool): Promise<AccountRecord | undefined> {
-  const next = await refreshAuth(account.auth, true);
-  if (!next) return undefined;
-  pool.store.saveAuth(account.meta.id, next);
-  return pool.store.get(account.meta.id);
+  const id = account.meta.id;
+  const locked = await pool.store.acquireRefreshLock(id);
+  try {
+    const current = pool.store.get(id) ?? account;
+    const next = await refreshAuth(current.auth, true);
+    if (!next) return undefined;
+    pool.store.saveAuth(id, next);
+    return pool.store.get(id);
+  } finally {
+    if (locked) pool.store.releaseRefreshLock(id);
+  }
 }
 
 function pipeResponse(upstream: Response, res: ServerResponse): void {
@@ -104,10 +126,13 @@ export async function peekSseFallback(
       chunks.push(value);
       text += decoder.decode(value, { stream: true });
 
-      const matched = SSE_FALLBACK_PATTERNS.find((pattern) =>
-        text.toLowerCase().includes(pattern)
-      );
-      if (matched) {
+      const lower = text.toLowerCase();
+      const matched = SSE_FALLBACK_PATTERNS.find((pattern) => lower.includes(pattern));
+      // response.failed is the Responses API's structured "upstream gave up
+      // mid-stream" signal — treat it as a failure even when no known text
+      // pattern matches (e.g. a new capacity-message wording we don't know yet).
+      const failedEvent = !matched && text.includes("response.failed");
+      if (matched || failedEvent) {
         await reader.cancel().catch(() => undefined);
         return {
           response,
@@ -116,11 +141,15 @@ export async function peekSseFallback(
         };
       }
 
-      // Once a normal response event starts, stop buffering and stream it.
+      // Once real content starts flowing, stop buffering and stream it — but
+      // wait for an actual content delta, not just the placeholder lifecycle
+      // events (created/in_progress/output_item.added fire before any content
+      // exists, so breaking on those alone can miss a canned apology message
+      // that arrives as the very first delta).
       if (
-        text.includes("response.created") ||
-        text.includes("response.in_progress") ||
-        text.includes("response.output_item.added")
+        text.includes("response.output_text.delta") ||
+        text.includes("response.completed") ||
+        text.includes("response.done")
       ) {
         break;
       }
@@ -185,6 +214,9 @@ export async function forwardCodexRequest(
 
     account = await ensureFresh(account, ctx.pool);
     tried.add(account.meta.id);
+    console.log(
+      `[proxy] ${pathAfterCodex} attempt ${attempt + 1}/${maxAccountTries} using ${accountLabel(account)}`
+    );
 
     const url = upstreamUrl(ctx.upstreamBase, pathAfterCodex);
     let headers: Record<string, string>;
@@ -209,6 +241,7 @@ export async function forwardCodexRequest(
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[proxy] ${accountLabel(account)} network error: ${msg}`);
       ctx.pool.markCooldown(account.meta.id, 30_000, { error: msg });
       lastBody = msg;
       lastStatus = 502;
@@ -217,6 +250,9 @@ export async function forwardCodexRequest(
 
     // Auth failure → one forced refresh + retry same account
     if (upstream.status === 401 || upstream.status === 403) {
+      console.warn(
+        `[proxy] ${accountLabel(account)} got ${upstream.status}, forcing token refresh`
+      );
       const refreshed = await forceRefresh(account, ctx.pool);
       if (refreshed) {
         try {
@@ -228,9 +264,18 @@ export async function forwardCodexRequest(
             signal: AbortSignal.timeout(10 * 60_000),
           });
           account = refreshed;
-        } catch {
-          /* fall through to failover */
+          console.log(
+            `[proxy] ${accountLabel(account)} retried after refresh, status=${upstream.status}`
+          );
+        } catch (e) {
+          console.warn(
+            `[proxy] ${accountLabel(account)} retry after refresh threw: ${
+              e instanceof Error ? e.message : String(e)
+            }`
+          );
         }
+      } else {
+        console.warn(`[proxy] ${accountLabel(account)} token refresh failed`);
       }
     }
 
@@ -238,7 +283,7 @@ export async function forwardCodexRequest(
     upstream = peeked.response;
     const effectiveStatus = peeked.status ?? upstream.status;
 
-    if (effectiveStatus === 429 || effectiveStatus >= 500) {
+    if (effectiveStatus === 429 || effectiveStatus === 401 || effectiveStatus === 403 || effectiveStatus >= 500) {
       const errText =
         peeked.errorText ?? (await upstream.clone().text().catch(() => ""));
       const decision = checkFallbackError(
@@ -255,7 +300,13 @@ export async function forwardCodexRequest(
           backoffLevel: decision.newBackoffLevel,
           error: errText.slice(0, 500),
           permanent: decision.permanent,
+          authFailed: effectiveStatus === 401 || effectiveStatus === 403,
         });
+        console.warn(
+          `[proxy] ${accountLabel(account)} unavailable (${effectiveStatus}), cooldown ${Math.round(
+            cooldownMs / 1000
+          )}s, trying next account`
+        );
         lastStatus = effectiveStatus;
         lastBody = errText || upstream.statusText;
         continue;
@@ -264,11 +315,12 @@ export async function forwardCodexRequest(
 
     // Success (or non-failover client error like 400) — stream through
     ctx.pool.markUsed(account.meta.id, sessionKey);
-    res.setHeader("x-zion-account", account.meta.email ?? account.meta.id);
+    res.setHeader("x-zion-account", accountLabel(account));
     pipeResponse(upstream, res);
     return;
   }
 
+  console.warn(`[proxy] ${pathAfterCodex} exhausted all accounts, last status=${lastStatus}`);
   res.statusCode = lastStatus;
   res.setHeader("Content-Type", "application/json");
   res.end(

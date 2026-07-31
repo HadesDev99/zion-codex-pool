@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { accountDisplayName } from "./accountStatus";
-import { runAddAccount } from "./addAccount";
+import { runAddAccount, runReloginAccount } from "./addAccount";
 import { PoolClient } from "./client";
 import { applyCodexConfig, codexConfigPath } from "./codexConfig";
 import { PoolProcessManager } from "./process";
@@ -125,6 +125,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const msg = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`Zion Pool: ${msg}`);
       }
+    }),
+    vscode.commands.registerCommand("zionPool.reloginAccount", async (item?: { accountId?: string }) => {
+      if (!(await checkHealth())) {
+        void vscode.window.showWarningMessage("Zion Pool: pooler is not running.");
+        return;
+      }
+      const accounts = await client.listAccounts();
+      let account = accounts.find((a) => a.id === item?.accountId);
+      if (!account) {
+        const pick = await vscode.window.showQuickPick(
+          accounts.map((a) => ({
+            label: accountDisplayName(a),
+            description: a.id,
+            id: a.id,
+          })),
+          { placeHolder: "Account to relogin" }
+        );
+        account = accounts.find((a) => a.id === pick?.id);
+      }
+      if (!account) return;
+      await runReloginAccount({
+        client,
+        settings: readSettings(),
+        refreshUi,
+        log: (line) => processManager.outputChannel.appendLine(line),
+        accountId: account.id,
+        accountLabel: accountDisplayName(account),
+      });
     }),
     vscode.commands.registerCommand("zionPool.applyCodexConfig", async () => {
       try {

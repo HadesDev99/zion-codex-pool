@@ -9,7 +9,6 @@ export const MANAGED_END = "# <<< zion-pool managed";
 export interface CodexWireSettings {
   host: string;
   port: number;
-  poolApiKey?: string;
 }
 
 export function codexConfigPath(): string {
@@ -17,10 +16,6 @@ export function codexConfigPath(): string {
 }
 
 export function buildManagedBlock(settings: CodexWireSettings): string {
-  const authLines = settings.poolApiKey
-    ? `env_key = "CODEX_POOL_API_KEY"\n`
-    : "";
-
   return (
     `${MANAGED_BEGIN}\n` +
     `model_provider = "zion-pool"\n` +
@@ -28,7 +23,6 @@ export function buildManagedBlock(settings: CodexWireSettings): string {
     `[model_providers.zion-pool]\n` +
     `name = "OpenAI"\n` +
     `base_url = "http://${settings.host}:${settings.port}/backend-api/codex"\n` +
-    authLines +
     `wire_api = "responses"\n` +
     `supports_websockets = true\n` +
     `requires_openai_auth = true\n` +
@@ -120,7 +114,7 @@ function readWireSettings(): CodexWireSettings {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { readSettings } = require("./settings") as typeof import("./settings");
   const s = readSettings();
-  return { host: s.host, port: s.port, poolApiKey: s.poolApiKey };
+  return { host: s.host, port: s.port };
 }
 
 function escapeRegExp(value: string): string {

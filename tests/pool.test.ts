@@ -17,6 +17,7 @@ function account(
     used?: number;
     cooldownUntil?: string;
     stickyDisabled?: boolean;
+    authFailedAt?: string;
   } = {}
 ): AccountRecord {
   return {
@@ -24,6 +25,7 @@ function account(
       id,
       cooldownUntil: opts.cooldownUntil,
       stickyDisabled: opts.stickyDisabled,
+      authFailedAt: opts.authFailedAt,
       quota: {
         weekly: { label: "Weekly", percentUsed: opts.used ?? 0 },
         updatedAt: new Date().toISOString(),
@@ -64,6 +66,18 @@ describe("pickAccount", () => {
       { skipThreshold: 95 }
     );
     expect(picked?.meta.id).toBe("ok");
+  });
+
+  it("pushes an auth-failed account to the back regardless of quota", () => {
+    const failedAt = new Date().toISOString();
+    const picked = pickAccount(
+      [
+        account("low-quota-but-401", { used: 5, authFailedAt: failedAt }),
+        account("higher-quota-healthy", { used: 60 }),
+      ],
+      { skipThreshold: 95 }
+    );
+    expect(picked?.meta.id).toBe("higher-quota-healthy");
   });
 
   it("honors sticky preference when healthy", () => {

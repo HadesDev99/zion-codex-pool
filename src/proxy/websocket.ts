@@ -202,6 +202,30 @@ export function attachCodexWebSocket(
 
       socket.on("close", (code, reason) => {
         if (socket !== upstream) return;
+
+        if (!upstreamResponded) {
+          // Upstream dropped the connection without ever answering — a flaky
+          // account/route, not a genuine "no content" response. Cool it down
+          // so the retry (and the next turn) prefers a different account.
+          ctx.pool.markCooldown(account.meta.id, TRANSIENT_COOLDOWN_MS, {
+            error: `upstream closed before responding (${code})`,
+          });
+
+          if (
+            !clientGone &&
+            capacityRetryCount < retryDelays.length &&
+            replayableClientFrames.length > 0
+          ) {
+            const delay = retryDelays[capacityRetryCount++];
+            upstream = undefined;
+            retryTimer = setTimeout(() => {
+              retryTimer = undefined;
+              void connectUpstream();
+            }, delay);
+            return;
+          }
+        }
+
         closeBoth(code, reason.toString());
       });
       socket.on("error", () => {

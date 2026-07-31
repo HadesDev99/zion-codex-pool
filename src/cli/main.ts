@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -20,8 +19,6 @@ Usage:
   zion-codex-pool delete <account-id>
   zion-codex-pool refresh-quota
   zion-codex-pool print-config                # print ~/.codex/config.toml snippet
-
-Env: DATA_DIR, POOL_API_KEY, PORT, HOST
 `);
   process.exit(1);
 }
@@ -120,12 +117,6 @@ async function main(): Promise<void> {
   }
 
   if (cmd === "print-config") {
-    const authLines = config.poolApiKey
-      ? `env_key = "CODEX_POOL_API_KEY"
-# export CODEX_POOL_API_KEY="<your POOL_API_KEY>"
-`
-      : `# no env_key — pooler is open on ${config.host} (solo local use)
-`;
     console.log(`# Add to ~/.codex/config.toml (user-level, not project-local)
 # >>> zion-pool managed
 model_provider = "zion-pool"
@@ -133,7 +124,7 @@ model_provider = "zion-pool"
 [model_providers.zion-pool]
 name = "OpenAI"
 base_url = "http://${config.host}:${config.port}/backend-api/codex"
-${authLines}wire_api = "responses"
+wire_api = "responses"
 supports_websockets = true
 requires_openai_auth = true
 # <<< zion-pool managed

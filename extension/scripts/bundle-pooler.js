@@ -37,7 +37,6 @@ const pkg = {
   private: true,
   type: "module",
   dependencies: {
-    dotenv: require(path.join(repoRoot, "package.json")).dependencies.dotenv,
     ws: require(path.join(repoRoot, "package.json")).dependencies.ws,
   },
 };

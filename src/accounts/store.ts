@@ -33,6 +33,19 @@ function slugId(): string {
   return `a_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`;
 }
 
+// A refresh_token is single-use (rotates on every refresh). Two separate pool
+// processes sharing the same data directory (e.g. one per editor) must not refresh
+// the same account concurrently, or the loser reuses an already-invalidated
+// token. `mkdir` is atomic across processes, so it doubles as a lock; a stale
+// lock (owner crashed mid-refresh) is reclaimed after REFRESH_LOCK_STALE_MS.
+const REFRESH_LOCK_STALE_MS = 30_000;
+const REFRESH_LOCK_POLL_MS = 100;
+const REFRESH_LOCK_WAIT_MS = 10_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const OPAQUE_ID_LABEL_RE = /^a_[a-z0-9]+_[a-z0-9]+$/i;
 
 /**
@@ -50,7 +63,7 @@ function cleanLabel(label: string | undefined): string | undefined {
   return isOpaqueLabel(label) ? undefined : label;
 }
 
-/** Filesystem account store under DATA_DIR/accounts/<id>/{auth.json,meta.json} */
+/** Filesystem account store under <data-dir>/accounts/<id>/{auth.json,meta.json} */
 export class AccountStore {
   readonly root: string;
 
@@ -110,6 +123,56 @@ export class AccountStore {
 
   saveMeta(meta: AccountState): void {
     writeJsonAtomic(this.metaPath(meta.id), meta);
+  }
+
+  private lockDir(id: string): string {
+    return path.join(this.accountDir(id), ".refresh.lock");
+  }
+
+  /**
+   * Acquire the cross-process refresh lock for an account, waiting up to
+   * REFRESH_LOCK_WAIT_MS. Returns false if the wait timed out (caller should
+   * still re-read the account and proceed — better a rare duplicate refresh
+   * than a stuck request).
+   */
+  async acquireRefreshLock(id: string): Promise<boolean> {
+    const dir = this.lockDir(id);
+    ensureDir(this.accountDir(id));
+    const deadline = Date.now() + REFRESH_LOCK_WAIT_MS;
+    for (;;) {
+      try {
+        fs.mkdirSync(dir);
+        return true;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      }
+
+      let ageMs = Infinity;
+      try {
+        ageMs = Date.now() - fs.statSync(dir).mtimeMs;
+      } catch {
+        continue; // lock disappeared between the mkdir attempt and stat — retry immediately
+      }
+      if (ageMs > REFRESH_LOCK_STALE_MS) {
+        try {
+          fs.rmdirSync(dir);
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+
+      if (Date.now() >= deadline) return false;
+      await sleep(REFRESH_LOCK_POLL_MS);
+    }
+  }
+
+  releaseRefreshLock(id: string): void {
+    try {
+      fs.rmdirSync(this.lockDir(id));
+    } catch {
+      /* ignore */
+    }
   }
 
   setQuota(id: string, quota: QuotaInfo): void {

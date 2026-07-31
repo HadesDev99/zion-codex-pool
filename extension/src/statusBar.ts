@@ -42,7 +42,7 @@ export class PoolStatusBar {
       this.item.text = "$(debug-disconnect) Pool: off";
       this.item.tooltip = [
         "Zion Codex Pool is not running. Click to refresh / start via command palette.",
-        `DATA_DIR: ${dataDir}`,
+        `Data: ${dataDir}`,
       ].join("\n");
       this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
       this.item.command = "zionPool.start";
@@ -60,7 +60,7 @@ export class PoolStatusBar {
       "Zion Codex Pool",
       `${this.health.ready}/${this.health.accounts} accounts ready`,
       `Lowest quota used: ${badge}`,
-      `DATA_DIR: ${dataDir}`,
+      `Data: ${dataDir}`,
       "Click to refresh",
     ].join("\n");
     this.item.backgroundColor = undefined;

@@ -2,7 +2,7 @@
   "name": "zion-codex-pool",
   "displayName": "Zion Codex Pool",
   "description": "UI for the local Codex account pooler — start the proxy, manage ChatGPT accounts, wire Codex CLI/IDE.",
-  "version": "0.1.11",
+  "version": "0.1.14",
   "publisher": "hadesdev",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -31,28 +31,6 @@
           "type": "boolean",
           "default": true,
           "description": "Start the local pooler automatically when VS Code / Cursor opens."
-        },
-        "zionPool.host": {
-          "type": "string",
-          "default": "127.0.0.1",
-          "description": "Pooler bind / connect host."
-        },
-        "zionPool.port": {
-          "type": "number",
-          "default": 4000,
-          "minimum": 1,
-          "maximum": 65535,
-          "description": "Pooler HTTP / WebSocket port."
-        },
-        "zionPool.dataDir": {
-          "type": "string",
-          "default": "",
-          "description": "Account data directory (DATA_DIR). Empty = ~/.zion-codex-pool."
-        },
-        "zionPool.poolApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Optional POOL_API_KEY. Leave empty for open loopback access."
         },
         "zionPool.serverPath": {
           "type": "string",
@@ -126,6 +104,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "zionPool.reloginAccount",
+        "title": "Relogin Account",
+        "category": "Zion Pool",
+        "icon": "$(sign-in)"
+      },
+      {
         "command": "zionPool.applyCodexConfig",
         "title": "Wire Codex to Pool",
         "category": "Zion Pool",
@@ -195,9 +179,14 @@
       ],
       "view/item/context": [
         {
-          "command": "zionPool.deleteAccount",
+          "command": "zionPool.reloginAccount",
           "when": "view == zionPool.accounts && viewItem == poolAccount",
           "group": "1_edit@1"
+        },
+        {
+          "command": "zionPool.deleteAccount",
+          "when": "view == zionPool.accounts && viewItem == poolAccount",
+          "group": "1_edit@2"
         }
       ]
     }

@@ -24,6 +24,7 @@ export interface AccountSummary {
   stickyDisabled?: boolean;
   lastUsedAt?: string;
   lastError?: string;
+  authFailedAt?: string;
   quota?: QuotaInfo;
   quotaUsed?: number;
 }
@@ -39,10 +40,7 @@ export class PoolClient {
   constructor(private readonly getSettings: () => PoolSettings = readSettings) {}
 
   private headers(): Record<string, string> {
-    const key = this.getSettings().poolApiKey;
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (key) headers.Authorization = `Bearer ${key}`;
-    return headers;
+    return { Accept: "application/json" };
   }
 
   private url(pathname: string): string {

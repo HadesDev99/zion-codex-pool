@@ -1,5 +1,5 @@
 import { IncomingMessage, ServerResponse } from "node:http";
-import { AccountPool, isInCooldown, maxPercentUsed } from "../accounts/pool.js";
+import { AccountPool, isInCooldown, maxPercentUsed, selectionRank } from "../accounts/pool.js";
 import { refreshAllQuotas } from "../accounts/quota.js";
 import { AuthJson } from "../auth/types.js";
 import { forwardCodexRequest } from "../proxy/forward.js";
@@ -21,39 +21,14 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
   res.end(JSON.stringify(body, null, 2));
 }
 
-export function requirePoolKey(
-  req: IncomingMessage,
-  res: ServerResponse,
-  expected: string
-): boolean {
-  // Local solo use: no POOL_API_KEY configured → accept everything on loopback.
-  if (!expected) return true;
-
-  const auth = req.headers.authorization ?? "";
-  const match = /^Bearer\s+(.+)$/i.exec(auth);
-  const token = match?.[1]?.trim() ?? "";
-  if (!token) {
-    sendJson(res, 401, { error: { message: "Missing Bearer token (POOL_API_KEY)" } });
-    return false;
-  }
-  if (token !== expected) {
-    sendJson(res, 401, { error: { message: "Invalid POOL_API_KEY" } });
-    return false;
-  }
-  return true;
-}
-
 export async function handleCodexHttp(
   req: IncomingMessage,
   res: ServerResponse,
   pool: AccountPool,
-  upstreamBase: string,
-  poolApiKey: string
+  upstreamBase: string
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (!url.pathname.startsWith("/backend-api/codex")) return false;
-
-  if (!requirePoolKey(req, res, poolApiKey)) return true;
 
   const suffix = url.pathname.slice("/backend-api/codex".length) || "";
   // Normalize: "" or "/" → models listing is separate; responses paths
@@ -104,26 +79,28 @@ export async function handleCodexHttp(
 export async function handleAdmin(
   req: IncomingMessage,
   res: ServerResponse,
-  pool: AccountPool,
-  poolApiKey: string
+  pool: AccountPool
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (!url.pathname.startsWith("/admin")) return false;
-  if (!requirePoolKey(req, res, poolApiKey)) return true;
 
   if (url.pathname === "/admin/accounts" && req.method === "GET") {
-    const accounts = pool.store.list().map((a) => ({
-      id: a.meta.id,
-      label: a.meta.label,
-      email: a.meta.email,
-      chatgptAccountId: a.meta.chatgptAccountId,
-      cooldownUntil: a.meta.cooldownUntil,
-      stickyDisabled: a.meta.stickyDisabled,
-      lastUsedAt: a.meta.lastUsedAt,
-      lastError: a.meta.lastError,
-      quota: a.meta.quota,
-      quotaUsed: maxPercentUsed(a.meta.quota),
-    }));
+    const accounts = pool.store
+      .list()
+      .sort((a, b) => selectionRank(a.meta) - selectionRank(b.meta))
+      .map((a) => ({
+        id: a.meta.id,
+        label: a.meta.label,
+        email: a.meta.email,
+        chatgptAccountId: a.meta.chatgptAccountId,
+        cooldownUntil: a.meta.cooldownUntil,
+        stickyDisabled: a.meta.stickyDisabled,
+        lastUsedAt: a.meta.lastUsedAt,
+        lastError: a.meta.lastError,
+        authFailedAt: a.meta.authFailedAt,
+        quota: a.meta.quota,
+        quotaUsed: maxPercentUsed(a.meta.quota),
+      }));
     sendJson(res, 200, { accounts });
     return true;
   }
