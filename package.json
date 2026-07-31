@@ -19,7 +19,7 @@
     "extension:package": "npm run build && npm run package --prefix extension"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.15.0"
   },
   "license": "MIT",
   "dependencies": {

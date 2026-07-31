@@ -2,7 +2,7 @@
   "name": "zion-codex-pool",
   "displayName": "Zion Codex Pool",
   "description": "UI for the local Codex account pooler — start the proxy, manage ChatGPT accounts, wire Codex CLI/IDE.",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "publisher": "hadesdev",
   "icon": "media/icon.png",
   "license": "MIT",
