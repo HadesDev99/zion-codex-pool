@@ -15,6 +15,7 @@ export interface App {
 
 export function createApp(config: Config): App {
   const store = new AccountStore(config.dataDir);
+  store.backfillIdentities();
   const pool = new AccountPool(store, config.quotaSkipThreshold);
 
   const server = http.createServer(async (req, res) => {
@@ -51,16 +52,15 @@ export function createApp(config: Config): App {
       socket.destroy();
       return;
     }
-    const auth = req.headers.authorization ?? "";
-    const match = /^Bearer\s+(.+)$/i.exec(auth);
-    const token = match?.[1]?.trim() ?? "";
-    const keyOk =
-      token &&
-      (config.poolApiKey === "change-me" || token === config.poolApiKey);
-    if (!keyOk) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
+    if (config.poolApiKey) {
+      const auth = req.headers.authorization ?? "";
+      const match = /^Bearer\s+(.+)$/i.exec(auth);
+      const token = match?.[1]?.trim() ?? "";
+      if (token !== config.poolApiKey) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);

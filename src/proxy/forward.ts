@@ -2,9 +2,21 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { AccountPool, checkFallbackError, parseResetsAtMs } from "../accounts/pool.js";
 import { refreshAuth, needsTokenRefresh } from "../auth/refresh.js";
 import { AccountRecord } from "../auth/types.js";
-import { buildUpstreamHeaders, extractSessionKey, readBody } from "./headers.js";
+import {
+  buildUpstreamHeaders,
+  decodeRequestBody,
+  extractSessionKey,
+  readBody,
+} from "./headers.js";
 
-const MAX_ACCOUNT_TRIES = 4;
+const SSE_PEEK_BYTES = 16 * 1024;
+const SSE_FALLBACK_PATTERNS = [
+  "model_at_capacity",
+  "selected model is at capacity",
+  "server_is_overloaded",
+  "service_unavailable_error",
+  "usage_limit_reached",
+];
 
 export interface ProxyContext {
   pool: AccountPool;
@@ -72,6 +84,81 @@ function pipeResponse(upstream: Response, res: ServerResponse): void {
   pump();
 }
 
+export async function peekSseFallback(
+  response: Response
+): Promise<{ response: Response; errorText?: string; status?: number }> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok || !response.body || !contentType.includes("text/event-stream")) {
+    return { response };
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  const decoder = new TextDecoder();
+  let text = "";
+
+  try {
+    while (text.length < SSE_PEEK_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      text += decoder.decode(value, { stream: true });
+
+      const matched = SSE_FALLBACK_PATTERNS.find((pattern) =>
+        text.toLowerCase().includes(pattern)
+      );
+      if (matched) {
+        await reader.cancel().catch(() => undefined);
+        return {
+          response,
+          errorText: text,
+          status: matched === "usage_limit_reached" ? 429 : 503,
+        };
+      }
+
+      // Once a normal response event starts, stop buffering and stream it.
+      if (
+        text.includes("response.created") ||
+        text.includes("response.in_progress") ||
+        text.includes("response.output_item.added")
+      ) {
+        break;
+      }
+    }
+  } catch {
+    // Preserve already-read bytes and let the downstream stream surface errors.
+  }
+
+  const replacementBody = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+    },
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+        } else {
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+
+  return {
+    response: new Response(replacementBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+  };
+}
+
 /**
  * Forward a Codex backend path with account failover.
  * pathAfterCodex: "/responses" | "/models" | "/responses/compact"
@@ -84,14 +171,15 @@ export async function forwardCodexRequest(
 ): Promise<void> {
   const method = req.method ?? "GET";
   const bodyBuf = method === "GET" || method === "HEAD" ? undefined : await readBody(req);
-  const bodyText = bodyBuf?.toString("utf8");
+  const bodyText = decodeRequestBody(bodyBuf, req.headers["content-encoding"]);
   const sessionKey = extractSessionKey(req, bodyText);
 
   const tried = new Set<string>();
   let lastStatus = 503;
   let lastBody = "No healthy Codex accounts in the pool";
 
-  for (let attempt = 0; attempt < MAX_ACCOUNT_TRIES; attempt++) {
+  const maxAccountTries = Math.max(1, ctx.pool.store.listIds().length);
+  for (let attempt = 0; attempt < maxAccountTries; attempt++) {
     let account = ctx.pool.pick(sessionKey, tried);
     if (!account) break;
 
@@ -146,10 +234,15 @@ export async function forwardCodexRequest(
       }
     }
 
-    if (upstream.status === 429 || upstream.status >= 500) {
-      const errText = await upstream.clone().text().catch(() => "");
+    const peeked = await peekSseFallback(upstream);
+    upstream = peeked.response;
+    const effectiveStatus = peeked.status ?? upstream.status;
+
+    if (effectiveStatus === 429 || effectiveStatus >= 500) {
+      const errText =
+        peeked.errorText ?? (await upstream.clone().text().catch(() => ""));
       const decision = checkFallbackError(
-        upstream.status,
+        effectiveStatus,
         errText,
         account.meta.backoffLevel ?? 0
       );
@@ -163,7 +256,7 @@ export async function forwardCodexRequest(
           error: errText.slice(0, 500),
           permanent: decision.permanent,
         });
-        lastStatus = upstream.status;
+        lastStatus = effectiveStatus;
         lastBody = errText || upstream.statusText;
         continue;
       }

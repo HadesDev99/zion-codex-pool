@@ -1,6 +1,6 @@
 {
   "name": "zion-codex-pool",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local Codex account pooler — route Codex CLI/IDE through multiple ChatGPT subscriptions without swapping auth.json",
   "type": "module",
   "bin": {
@@ -13,13 +13,17 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "cli": "tsx src/cli/main.ts"
+    "cli": "tsx src/cli/main.ts",
+    "extension:install": "npm install --prefix extension",
+    "extension:build": "npm run build && npm run build --prefix extension",
+    "extension:package": "npm run build && npm run package --prefix extension"
   },
   "engines": {
     "node": ">=20"
   },
   "license": "MIT",
   "dependencies": {
+    "dotenv": "^17.4.2",
     "ws": "^8.18.3"
   },
   "devDependencies": {

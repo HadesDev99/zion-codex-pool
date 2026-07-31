@@ -16,6 +16,7 @@ function envStr(name: string, fallback: string): string {
 export interface Config {
   host: string;
   port: number;
+  /** Empty = no client auth (default for 127.0.0.1 solo use). */
   poolApiKey: string;
   dataDir: string;
   quotaSkipThreshold: number;
@@ -25,10 +26,13 @@ export interface Config {
 
 export function loadConfig(): Config {
   const dataDir = envStr("DATA_DIR", path.join(os.homedir(), ".zion-codex-pool"));
+  const rawKey = process.env.POOL_API_KEY;
   return {
     host: envStr("HOST", "127.0.0.1"),
     port: envInt("PORT", 4000),
-    poolApiKey: envStr("POOL_API_KEY", "change-me"),
+    // Unset / empty / placeholder → open locally. Set a real key only if you expose beyond loopback.
+    poolApiKey:
+      !rawKey || rawKey === "change-me" || rawKey.trim() === "" ? "" : rawKey.trim(),
     dataDir,
     quotaSkipThreshold: Math.min(100, Math.max(50, envInt("QUOTA_SKIP_THRESHOLD", 95))),
     quotaPollMs: Math.max(30_000, envInt("QUOTA_POLL_MS", 120_000)),

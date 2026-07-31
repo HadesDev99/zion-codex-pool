@@ -1,0 +1,123 @@
+# Publish Zion Codex Pool to the Visual Studio Marketplace (and optionally
+# Open VSX) when a version tag is pushed. The packaged VSIX is also attached
+# to a GitHub Release.
+#
+# One-time setup:
+# 1. Create an Azure DevOps PAT with Marketplace -> Manage permission
+#    (Organization: All accessible organizations).
+# 2. Add the token as the repository secret VSCE_PAT.
+# 3. Optional: add an Open VSX access token as OVSX_PAT.
+#
+# Release:
+#   1. Bump extension/package.json and extension/package-lock.json.
+#   2. Commit, then push a matching tag:
+#      git tag vX.Y.Z && git push origin vX.Y.Z
+#
+# Azure DevOps global PATs retire on 2026-12-01. Migrate this workflow to
+# Entra ID workload identity federation before then if the PAT path is in use.
+
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_marketplace:
+        description: Publish to Visual Studio Marketplace
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      SHOULD_PUBLISH: ${{ github.event_name == 'push' || inputs.publish_marketplace == true }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            extension/package-lock.json
+
+      - name: Install pooler dependencies
+        run: npm ci
+
+      - name: Install extension dependencies
+        run: npm ci --prefix extension
+
+      - name: Test pooler
+        run: npm test
+
+      - name: Typecheck pooler
+        run: npm run typecheck
+
+      - name: Typecheck extension
+        run: npm run typecheck --prefix extension
+
+      - name: Verify tag matches extension version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./extension/package.json').version")"
+          LOCK="$(node -p "require('./extension/package-lock.json').version")"
+          if [ "$PKG" != "$LOCK" ]; then
+            echo "::error::extension/package.json version ${PKG} does not match extension/package-lock.json version ${LOCK}"
+            exit 1
+          fi
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Git tag v${TAG} does not match extension/package.json version ${PKG}"
+            exit 1
+          fi
+          echo "Publishing version ${PKG}"
+
+      - name: Package VSIX
+        run: npm run extension:package
+
+      - name: Fail when Marketplace publish was requested without VSCE_PAT
+        if: env.SHOULD_PUBLISH == 'true' && env.VSCE_PAT == ''
+        run: |
+          echo "::error::VSCE_PAT secret is not set. Add it under Settings -> Secrets and variables -> Actions."
+          exit 1
+
+      - name: Publish to Visual Studio Marketplace
+        if: env.SHOULD_PUBLISH == 'true'
+        run: npx --prefix extension vsce publish --packagePath extension/*.vsix
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "extension/*.vsix"
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Publish to Open VSX
+        if: env.SHOULD_PUBLISH == 'true' && env.OVSX_PAT != ''
+        run: npx --yes ovsx publish extension/*.vsix --pat "$OVSX_PAT"
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zion-codex-pool-vsix
+          path: "extension/*.vsix"
+          if-no-files-found: error
+          retention-days: 30

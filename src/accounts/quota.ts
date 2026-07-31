@@ -126,6 +126,7 @@ export async function fetchQuota(auth: AuthJson): Promise<{ quota: QuotaInfo; au
 }
 
 export async function refreshAllQuotas(store: AccountStore): Promise<void> {
+  store.backfillIdentities();
   for (const account of store.list()) {
     const { quota, auth } = await fetchQuota(account.auth);
     store.saveAuth(account.meta.id, auth);

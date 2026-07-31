@@ -1,0 +1,219 @@
+{
+  "name": "zion-codex-pool",
+  "displayName": "Zion Codex Pool",
+  "description": "UI for the local Codex account pooler — start the proxy, manage ChatGPT accounts, wire Codex CLI/IDE.",
+  "version": "0.1.11",
+  "publisher": "hadesdev",
+  "icon": "media/icon.png",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "codex",
+    "openai",
+    "pool",
+    "quota",
+    "chatgpt"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Zion Codex Pool",
+      "properties": {
+        "zionPool.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the local pooler automatically when VS Code / Cursor opens."
+        },
+        "zionPool.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Pooler bind / connect host."
+        },
+        "zionPool.port": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Pooler HTTP / WebSocket port."
+        },
+        "zionPool.dataDir": {
+          "type": "string",
+          "default": "",
+          "description": "Account data directory (DATA_DIR). Empty = ~/.zion-codex-pool."
+        },
+        "zionPool.poolApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional POOL_API_KEY. Leave empty for open loopback access."
+        },
+        "zionPool.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to pooler entry (index.js). Empty = bundled resources or sibling ../dist/index.js."
+        },
+        "zionPool.quotaRefreshMinutes": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "How often to refresh the account tree / status bar from the pooler."
+        },
+        "zionPool.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show pool status in the status bar."
+        },
+        "zionPool.applyConfigOnStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ensure ~/.codex/config.toml points model_provider at the pool when the pooler starts."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "zionPool.start",
+        "title": "Start Pooler",
+        "category": "Zion Pool",
+        "icon": "$(play)"
+      },
+      {
+        "command": "zionPool.stop",
+        "title": "Stop Pooler",
+        "category": "Zion Pool",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "zionPool.refresh",
+        "title": "Refresh Accounts",
+        "category": "Zion Pool",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "zionPool.refreshQuota",
+        "title": "Refresh Quotas",
+        "category": "Zion Pool",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "zionPool.addAccount",
+        "title": "Add Account",
+        "category": "Zion Pool",
+        "icon": "$(add)"
+      },
+      {
+        "command": "zionPool.importLive",
+        "title": "Import Live Codex Auth",
+        "category": "Zion Pool"
+      },
+      {
+        "command": "zionPool.importFile",
+        "title": "Import auth.json File",
+        "category": "Zion Pool"
+      },
+      {
+        "command": "zionPool.deleteAccount",
+        "title": "Delete Account",
+        "category": "Zion Pool",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "zionPool.applyCodexConfig",
+        "title": "Wire Codex to Pool",
+        "category": "Zion Pool",
+        "icon": "$(link)"
+      },
+      {
+        "command": "zionPool.openOutput",
+        "title": "Show Pooler Output",
+        "category": "Zion Pool"
+      },
+      {
+        "command": "zionPool.openDataDir",
+        "title": "Open Data Directory",
+        "category": "Zion Pool"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "zionPool",
+          "title": "Zion Pool",
+          "icon": "media/icon-sidebar.svg"
+        }
+      ]
+    },
+    "views": {
+      "zionPool": [
+        {
+          "id": "zionPool.accounts",
+          "name": "Pool Accounts",
+          "contextualTitle": "Zion Codex Pool"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "zionPool.start",
+          "when": "view == zionPool.accounts && !zionPool.running",
+          "group": "navigation@0"
+        },
+        {
+          "command": "zionPool.stop",
+          "when": "view == zionPool.accounts && zionPool.running",
+          "group": "navigation@0"
+        },
+        {
+          "command": "zionPool.addAccount",
+          "when": "view == zionPool.accounts",
+          "group": "navigation@1"
+        },
+        {
+          "command": "zionPool.applyCodexConfig",
+          "when": "view == zionPool.accounts",
+          "group": "navigation@2"
+        },
+        {
+          "command": "zionPool.refresh",
+          "when": "view == zionPool.accounts",
+          "group": "navigation@3"
+        },
+        {
+          "command": "zionPool.refreshQuota",
+          "when": "view == zionPool.accounts",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "zionPool.deleteAccount",
+          "when": "view == zionPool.accounts && viewItem == poolAccount",
+          "group": "1_edit@1"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "vscode:prepublish": "node esbuild.js --production && node scripts/bundle-pooler.js",
+    "package": "vsce package --no-dependencies",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.3"
+  }
+}

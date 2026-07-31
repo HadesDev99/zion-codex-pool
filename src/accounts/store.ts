@@ -33,6 +33,23 @@ function slugId(): string {
   return `a_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`;
 }
 
+const OPAQUE_ID_LABEL_RE = /^a_[a-z0-9]+_[a-z0-9]+$/i;
+
+/**
+ * Labels inherited from a zion-switcher import carry no meaning in the pool
+ * (they are switcher directory ids, or its "live" slot name).
+ */
+export function isOpaqueLabel(label: string | undefined): boolean {
+  if (!label) return false;
+  const trimmed = label.trim();
+  if (trimmed.length === 0) return true;
+  return trimmed.toLowerCase() === "live" || OPAQUE_ID_LABEL_RE.test(trimmed);
+}
+
+function cleanLabel(label: string | undefined): string | undefined {
+  return isOpaqueLabel(label) ? undefined : label;
+}
+
 /** Filesystem account store under DATA_DIR/accounts/<id>/{auth.json,meta.json} */
 export class AccountStore {
   readonly root: string;
@@ -98,7 +115,43 @@ export class AccountStore {
   setQuota(id: string, quota: QuotaInfo): void {
     const rec = this.get(id);
     if (!rec) return;
-    this.saveMeta({ ...rec.meta, quota, email: quota.email ?? rec.meta.email });
+    const email = rec.meta.email ?? quota.email ?? authIdentity(rec.auth).email;
+    this.saveMeta({
+      ...rec.meta,
+      quota,
+      email,
+      label: email ? cleanLabel(rec.meta.label) : rec.meta.label,
+    });
+  }
+
+  /**
+   * Re-derive identity metadata (email, ChatGPT account id) from the stored
+   * tokens for accounts that predate it, and drop switcher-derived labels once
+   * an email is available. Tokens are never touched.
+   *
+   * @returns number of accounts whose meta.json changed.
+   */
+  backfillIdentities(): number {
+    let updated = 0;
+    for (const rec of this.list()) {
+      const identity = authIdentity(rec.auth);
+      const email = rec.meta.email ?? identity.email ?? rec.meta.quota?.email;
+      const chatgptAccountId = rec.meta.chatgptAccountId ?? identity.accountId;
+      const label = email ? cleanLabel(rec.meta.label) : rec.meta.label;
+      if (
+        email === rec.meta.email &&
+        chatgptAccountId === rec.meta.chatgptAccountId &&
+        label === rec.meta.label
+      ) {
+        continue;
+      }
+      const next: AccountState = { ...rec.meta, email, chatgptAccountId };
+      if (label === undefined) delete next.label;
+      else next.label = label;
+      this.saveMeta(next);
+      updated += 1;
+    }
+    return updated;
   }
 
   delete(id: string): boolean {
@@ -130,13 +183,18 @@ export class AccountStore {
 
     const id = existing?.meta.id ?? slugId();
     this.saveAuth(id, auth);
+    const email = identity.email ?? existing?.meta.email;
     const meta: AccountState = {
       ...(existing?.meta ?? { id }),
       id,
-      label: label ?? existing?.meta.label,
-      email: identity.email ?? existing?.meta.email,
+      email,
       chatgptAccountId: identity.accountId ?? existing?.meta.chatgptAccountId,
     };
+    // A switcher directory id as label would make the pool list mirror the
+    // switcher's naming; the email already identifies the account.
+    const nextLabel = cleanLabel(label ?? existing?.meta.label);
+    if (nextLabel === undefined) delete meta.label;
+    else meta.label = nextLabel;
     this.saveMeta(meta);
     return { meta, auth };
   }

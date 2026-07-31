@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-label="Zion Pool">
+  <!-- One solid silhouette: no corner nodes that can read as a grid/clover at 24px. -->
+  <path fill="currentColor" d="M4.5 4.5h15v4L10 15.5h9.5v4h-15v-4L14 8.5H4.5z"/>
+</svg>

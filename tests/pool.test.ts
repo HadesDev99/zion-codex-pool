@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { IncomingMessage } from "node:http";
 import {
   checkFallbackError,
   getQuotaCooldown,
@@ -8,6 +9,7 @@ import {
 } from "../src/accounts/pool.js";
 import { AccountRecord } from "../src/auth/types.js";
 import { authIdentity, decodeJwtPayload } from "../src/auth/types.js";
+import { buildUpstreamHeaders } from "../src/proxy/headers.js";
 
 function account(
   id: string,
@@ -110,5 +112,21 @@ describe("authIdentity", () => {
     expect(
       authIdentity({ tokens: { access_token: token, account_id: "acc_1" } }).email
     ).toBe("a@b.com");
+  });
+});
+
+describe("buildUpstreamHeaders", () => {
+  it("preserves Codex request compression metadata", () => {
+    const req = {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-encoding": "zstd",
+      },
+    } as IncomingMessage;
+
+    const headers = buildUpstreamHeaders(account("a"), req, "session-1");
+    expect(headers["content-encoding"]).toBe("zstd");
+    expect(headers.session_id).toBe("session-1");
   });
 });

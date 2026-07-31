@@ -1,4 +1,5 @@
 import { IncomingMessage } from "node:http";
+import zlib from "node:zlib";
 import { accessToken, AccountRecord, authIdentity } from "../auth/types.js";
 
 const HOP_BY_HOP = new Set([
@@ -19,6 +20,7 @@ const HOP_BY_HOP = new Set([
 const FORWARD_ALLOW = new Set([
   "accept",
   "accept-encoding",
+  "content-encoding",
   "content-type",
   "openai-beta",
   "originator",
@@ -73,6 +75,38 @@ export function buildUpstreamHeaders(
   }
 
   return headers;
+}
+
+/**
+ * Codex compresses request bodies for OpenAI-family providers. The compressed
+ * bytes are forwarded untouched, so decode a copy here purely to read routing
+ * hints such as `prompt_cache_key`.
+ */
+export function decodeRequestBody(
+  body: Buffer | undefined,
+  contentEncoding: string | string[] | undefined
+): string | undefined {
+  if (!body || body.length === 0) return undefined;
+
+  const encoding = (Array.isArray(contentEncoding) ? contentEncoding.join(",") : contentEncoding ?? "")
+    .trim()
+    .toLowerCase();
+
+  try {
+    if (encoding === "" || encoding === "identity") return body.toString("utf8");
+    if (encoding === "gzip" || encoding === "x-gzip") return zlib.gunzipSync(body).toString("utf8");
+    if (encoding === "deflate") return zlib.inflateSync(body).toString("utf8");
+    if (encoding === "br") return zlib.brotliDecompressSync(body).toString("utf8");
+    if (encoding === "zstd") {
+      const zstdDecompressSync = (
+        zlib as unknown as { zstdDecompressSync?: (buf: Buffer) => Buffer }
+      ).zstdDecompressSync;
+      if (zstdDecompressSync) return zstdDecompressSync(body).toString("utf8");
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export function extractSessionKey(req: IncomingMessage, bodyText?: string): string | undefined {

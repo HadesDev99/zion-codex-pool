@@ -8,9 +8,13 @@ Local Codex account **pooler** (not a billing gateway, not Zion Switcher).
 Codex CLI/IDE talks to `http://127.0.0.1:4000/backend-api/codex`; the pooler
 holds many ChatGPT OAuth `auth.json` files and fails over on quota/auth errors.
 
+`extension/` is the VS Code / Cursor UI: spawn/stop the Node server, manage
+accounts via `/admin/*`, wire `~/.codex/config.toml`. Do not import the pool
+server into the extension host — always `spawn("node", [entry])`.
+
 Sibling context:
 - `../llm-router/zion-gateway` — production multi-provider gateway (patterns borrowed)
-- `../llm-router/zion-switcher` — VS Code auth.json switcher (account source via CLI)
+- `../llm-router/zion-switcher` — separate product (one live auth.json); Pool store is independent (CLI `import-switcher` is an optional escape hatch only)
 
 ## Commands
 
@@ -21,6 +25,8 @@ npm run typecheck
 npm test
 npm run cli -- import-live
 npm run cli -- print-config
+npm run extension:install
+npm run extension:build
 ```
 
 ## Architecture

@@ -1,10 +1,17 @@
 import { IncomingMessage, ServerResponse } from "node:http";
-import { AccountPool } from "../accounts/pool.js";
-import { maxPercentUsed } from "../accounts/pool.js";
+import { AccountPool, isInCooldown, maxPercentUsed } from "../accounts/pool.js";
 import { refreshAllQuotas } from "../accounts/quota.js";
 import { AuthJson } from "../auth/types.js";
 import { forwardCodexRequest } from "../proxy/forward.js";
 import { readBody } from "../proxy/headers.js";
+
+/** Auth-dead accounts must not inflate /health ready (mirrors extension badge). */
+function isAuthFailureMessage(message: string | undefined): boolean {
+  if (!message) return false;
+  return /unauthorized|not signed in|missing(?:\s+\w+)*\s*token|invalid(?:\s+\w+)*\s*token|expired(?:\s+\w+)*\s*token|no refresh token/i.test(
+    message
+  );
+}
 
 export type SendJson = (res: ServerResponse, status: number, body: unknown) => void;
 
@@ -19,10 +26,9 @@ export function requirePoolKey(
   res: ServerResponse,
   expected: string
 ): boolean {
-  if (!expected || expected === "change-me") {
-    // Dev convenience: still require a header so random LAN traffic isn't open,
-    // but accept any non-empty bearer when key is the placeholder.
-  }
+  // Local solo use: no POOL_API_KEY configured → accept everything on loopback.
+  if (!expected) return true;
+
   const auth = req.headers.authorization ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(auth);
   const token = match?.[1]?.trim() ?? "";
@@ -30,7 +36,7 @@ export function requirePoolKey(
     sendJson(res, 401, { error: { message: "Missing Bearer token (POOL_API_KEY)" } });
     return false;
   }
-  if (expected && expected !== "change-me" && token !== expected) {
+  if (token !== expected) {
     sendJson(res, 401, { error: { message: "Invalid POOL_API_KEY" } });
     return false;
   }
@@ -172,7 +178,15 @@ export function handleHealth(req: IncomingMessage, res: ServerResponse, pool: Ac
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (url.pathname !== "/health" && url.pathname !== "/") return false;
   const accounts = pool.store.list();
-  const ready = accounts.filter((a) => !a.meta.stickyDisabled && !a.meta.cooldownUntil);
+  // Ready ≈ routable: not suspended, not cooling down, not auth-dead.
+  // (Expired cooldownUntil must not keep the account out of ready.)
+  const ready = accounts.filter((a) => {
+    if (a.meta.stickyDisabled) return false;
+    if (isInCooldown(a.meta)) return false;
+    const authMsg = a.meta.quota?.error ?? a.meta.lastError;
+    if (authMsg && isAuthFailureMessage(authMsg)) return false;
+    return true;
+  });
   sendJson(res, 200, {
     ok: true,
     service: "zion-codex-pool",

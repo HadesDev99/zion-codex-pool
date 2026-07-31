@@ -5,3 +5,7 @@ dist/
 *.log
 coverage/
 .data/
+extension/node_modules/
+extension/dist/
+extension/resources/
+*.vsix

@@ -4,7 +4,7 @@ import { AccountStore } from "./store.js";
 const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
 const BACKOFF_MAX_LEVEL = 15;
-const TRANSIENT_COOLDOWN_MS = 30_000;
+export const TRANSIENT_COOLDOWN_MS = 30_000;
 const MAX_RATE_LIMIT_COOLDOWN_MS = 30 * 60_000;
 
 export function maxPercentUsed(quota: QuotaInfo | undefined): number {
@@ -71,14 +71,63 @@ export function checkFallbackError(
   return { shouldFallback: false, cooldownMs: 0 };
 }
 
+interface UsageLimitError {
+  resets_at?: number;
+  resets_in_seconds?: number;
+}
+
+/**
+ * Quota errors arrive either as a plain JSON body or as SSE frames, so collect
+ * both the whole payload and every `data:` line as parse candidates.
+ */
+function jsonCandidates(bodyText: string): unknown[] {
+  const found: unknown[] = [];
+  const push = (raw: string): void => {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return;
+    try {
+      found.push(JSON.parse(trimmed));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  push(bodyText);
+  for (const line of bodyText.split(/\r?\n/)) {
+    const separator = line.indexOf(":");
+    if (separator > 0 && line.slice(0, separator).trim().toLowerCase() === "data") {
+      push(line.slice(separator + 1));
+    }
+  }
+  return found;
+}
+
+function findUsageLimitError(value: unknown, depth = 0): UsageLimitError | undefined {
+  if (depth > 6 || !value || typeof value !== "object") return undefined;
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findUsageLimitError(item, depth + 1);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.type === "usage_limit_reached") return record as UsageLimitError;
+
+  for (const nested of Object.values(record)) {
+    const hit = findUsageLimitError(nested, depth + 1);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 export function parseResetsAtMs(bodyText: string): number | undefined {
-  try {
-    const json = JSON.parse(bodyText) as {
-      error?: { type?: string; resets_at?: number; resets_in_seconds?: number };
-    };
-    const err = json?.error;
-    if (!err || err.type !== "usage_limit_reached") return undefined;
-    const now = Date.now();
+  const now = Date.now();
+  for (const candidate of jsonCandidates(bodyText)) {
+    const err = findUsageLimitError(candidate);
+    if (!err) continue;
     if (typeof err.resets_at === "number" && err.resets_at > 0) {
       const ms = err.resets_at * 1000;
       if (ms > now) return Math.min(ms, now + MAX_RATE_LIMIT_COOLDOWN_MS);
@@ -86,8 +135,6 @@ export function parseResetsAtMs(bodyText: string): number | undefined {
     if (typeof err.resets_in_seconds === "number" && err.resets_in_seconds > 0) {
       return Math.min(now + err.resets_in_seconds * 1000, now + MAX_RATE_LIMIT_COOLDOWN_MS);
     }
-  } catch {
-    /* ignore */
   }
   return undefined;
 }

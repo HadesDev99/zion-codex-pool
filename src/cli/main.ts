@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -119,20 +120,23 @@ async function main(): Promise<void> {
   }
 
   if (cmd === "print-config") {
-    const key = config.poolApiKey === "change-me" ? "your-pool-key" : config.poolApiKey;
+    const authLines = config.poolApiKey
+      ? `env_key = "CODEX_POOL_API_KEY"
+# export CODEX_POOL_API_KEY="<your POOL_API_KEY>"
+`
+      : `# no env_key — pooler is open on ${config.host} (solo local use)
+`;
     console.log(`# Add to ~/.codex/config.toml (user-level, not project-local)
+# >>> zion-pool managed
 model_provider = "zion-pool"
 
 [model_providers.zion-pool]
 name = "OpenAI"
 base_url = "http://${config.host}:${config.port}/backend-api/codex"
-env_key = "CODEX_POOL_API_KEY"
-wire_api = "responses"
+${authLines}wire_api = "responses"
 supports_websockets = true
 requires_openai_auth = true
-
-# Then:
-#   export CODEX_POOL_API_KEY="${key}"
+# <<< zion-pool managed
 `);
     return;
   }
